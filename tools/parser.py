@@ -124,6 +124,56 @@ def add_expedit_vit_args(parser):
     )
 
 
+def add_token_adapter_vit_args(parser):
+    parser.add_argument(
+        "--rh",
+        type=float,
+        default=0.3,
+        help="ratio of row tokens to drop"
+    )
+    parser.add_argument(
+        "--rw",
+        type=float,
+        default=0.3,
+        help="ratio of column tokens to drop"
+    )
+    parser.add_argument(
+        "--rp_hr",
+        type=float,
+        default=0.9,
+        help="ratio of representative row tokens"
+    )
+    parser.add_argument(
+        "--rp_wr",
+        type=float,
+        default=0.95,
+        help="ratio of representative column tokens"
+    )
+    parser.add_argument(
+        "--l_b",
+        type=int,
+        default=13,
+        help="layer index before which to start dropping tokens"
+    )
+    parser.add_argument(
+        "--l_m",
+        type=int,
+        default=11,
+        help="layer index before which to stop dropping tokens"
+    )
+    parser.add_argument(
+        "--l_a",
+        type=int,
+        default=0,
+        help="layer index after which to start recovering tokens"
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.5,
+        help="threshold for distance-based token selection"
+    )
+
 def add_tome_args(parser):
     parser.add_argument(
         "--tome_r",
@@ -255,6 +305,19 @@ def get_model_args(args):
             "cluster_temperture":   args.cluster_temperture,
             "cluster_window_size":  args.cluster_window_size,
         }
+    
+    elif 'token_adapter_vit' in args.model:
+        return {
+            "rh":                   args.rh,
+            "rw":                   args.rw,
+            "rp_hr":                args.rp_hr,
+            "rp_wr":                args.rp_wr,
+            "l_b":                  args.l_b,
+            "l_m":                  args.l_m,
+            "l_a":                  args.l_a,
+            "threshold":            args.threshold,
+        }
+    
     elif 'tome' in args.model:
         return {
             "tome_r":               args.tome_r,
