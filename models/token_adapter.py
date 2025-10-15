@@ -34,8 +34,6 @@ class TokenAdapterViT(VisionTransformer):
         self.l_a = l_a
         self.threshold = threshold
         
-        
-
     def __init__(
         self,
         rh: float = 0.3,
@@ -81,7 +79,7 @@ class TokenAdapterViT(VisionTransformer):
         n_h: int,
         n_w: int,
         device: torch.device,
-    ) -> torch.Tensor:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         # group -> labels then inject
         x_labs = group_tokens_by_imp_score(
             x_patches.view(n, n_h, n_w, -1),
@@ -92,15 +90,15 @@ class TokenAdapterViT(VisionTransformer):
             device=device,
         )
         x_reduced = token_injector(x_patches, x_labs)  # (n, N', d)
-        return x_reduced
+        M_d = compute_distance(q=x_patches, kv=x_reduced, mode="cosine")  # (n, N, N')
+        return x_reduced, M_d
 
     def _eject_tokens(
         self,
         x_patches_reduced: torch.Tensor,   # (n, N', d)
-        x_patches_orig: torch.Tensor,      # (n, N,  d)
+        M_d: torch.Tensor,                 # (n, N,  N')
     ) -> torch.Tensor:
         # compute_distance expects (n, N, d) for q/kv 
-        M_d = compute_distance(q=x_patches_orig, kv=x_patches_reduced, mode="cosine")
         x_full = token_ejector(x_patches_reduced, M_d, thres=self.threshold)  # (n, N, d)
         return x_full
 
@@ -124,12 +122,9 @@ class TokenAdapterViT(VisionTransformer):
 
         x = x + self.encoder.pos_embedding
         x = x.permute(1, 0, 2)  # (n, S, d)
-
-        # Keep a copy of the original (for ejection alignment)
-        x_orig = x
-
+        
         reduced = False
-        x_cls_cached = None  # cache CLS only once (from pre-injection state)
+        Md_cached = None
         print(f'Original input sequence: {x.shape}')
         for i, layer in enumerate(self.encoder.layers):
             
@@ -137,10 +132,7 @@ class TokenAdapterViT(VisionTransformer):
             if (i == self.l_b) and (not reduced):
                 x_cls, x_p = self._split_cls(x)                # exclude CLS
                 
-                if x_cls_cached is None:
-                    x_cls_cached = x_cls          
-        
-                x_p = self._inject_tokens(
+                x_p, M_d = self._inject_tokens(
                     x_patches=x_p,
                     n=n,
                     n_h=n_h,
@@ -150,7 +142,7 @@ class TokenAdapterViT(VisionTransformer):
 
                 print(f'Injected token at layer {i}: {x_p.shape}')
                 x = self._concat_cls(x_cls, x_p)    # reattach CLS for blocks
-                
+                Md_cached = M_d
                 reduced = True
 
             # Run the transformer block
@@ -158,17 +150,20 @@ class TokenAdapterViT(VisionTransformer):
 
             # Eject (reconstruct) exactly at l_m: use original patch tokens for q.
             if (i == self.l_m) and reduced:
-                # original patch tokens (exclude CLS from x_orig)
-                _, x_patches_orig = self._split_cls(x_orig)    # (n, N, d)
-                x_cls, x_patches_red = self._split_cls(x)      # (n, N', d)
-                x_patches_full = self._eject_tokens(
-                    x_patches_reduced=x_patches_red,
-                    x_patches_orig=x_patches_orig,
-                )                                              
-                print(f'Ejected token at layer {i}: {x_patches_full.shape}')
-                # restore sequence length and continue
-                x = self._concat_cls(x_cls_cached, x_patches_full)
-                reduced = False
+                # reduced tokens X`r already processed by subsequent layers after after the injection
+                x_cls_now, x_patches_red = self._split_cls(x)  # (n, N', d)
+                if Md_cached:
+                    # eject tokens back to full length N
+                    x_patches_full = self._eject_tokens(
+                        x_patches_reduced=x_patches_red,
+                        M_d=Md_cached,
+                    )                                              
+                    print(f'Ejected token at layer {i}: {x_patches_full.shape}')
+                    # restore sequence length and continue
+                    x = self._concat_cls(x_cls_now, x_patches_full)
+                    reduced = False
+                else:
+                    print("Warning: M_d not cached. No Reconstruction possible.")
 
         x = self.encoder.ln(x)
 
